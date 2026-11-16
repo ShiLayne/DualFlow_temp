@@ -1,0 +1,86 @@
+# ==============================================================================
+# Dual-Level DiT 训练与模型结构配置文件
+# 任务：Prompt = "小狗" -> 目标图像 = "data/dog.jpeg"
+# 启动方式：bash run.sh
+# ==============================================================================
+
+experiment:
+  name: "dual_dit_dog"
+  output_dir: "outputs/dual_dit_dog"
+  seed: 42
+
+# ------------------------------------------------------------------------------
+# 1. 数据与 Prompt 配置
+# ------------------------------------------------------------------------------
+data:
+  prompt: "小狗"
+  image_path: "data/dog.jpeg"
+  prompt_vocab:
+    - "小狗"
+  center_crop: true
+  # 单张图在一个虚拟 epoch 内重复次数，保证多卡 torchrun DistributedSampler 均匀切分
+  repeat_per_epoch: 128
+
+# ------------------------------------------------------------------------------
+# 2. Dual-Level DiT 模型结构配置
+#    可选 preset: "DualLevelDiT-S" | "DualLevelDiT-B" | "DualLevelDiT-L" | "DualLevelDiT-XL"
+#    下方显式字段会直接控制/覆盖模型结构参数
+# ------------------------------------------------------------------------------
+model:
+  # preset: "DualLevelDiT-S"
+  img_size: 256
+  in_channels: 3
+  detail_patch_size: 16       # 细节分支：16x16 patchify -> (H/16)*(W/16) 个 patch token
+  global_patch_size: 1        # 全局分支：1x1 patchify   -> H*W 个 pixel token
+  detail_hidden_size: 384     # PatchDiTBlock 隐藏维
+  detail_num_heads: 6         # PatchDiTBlock 注意力头数 (head_dim = 64)
+  global_hidden_size: 16      # GlobalDiTBlock 像素级 token 通道维
+  global_attn_dim: 384        # GlobalDiTBlock 空间压缩后的 Attention 维 (需被 global_num_heads 整除，且 head_dim % 4 == 0 以支持 2D RoPE)
+  global_num_heads: 6         # GlobalDiTBlock 注意力头数 (head_dim = 64)
+  depth: 12                   # 配对的 (PatchDiTBlock + GlobalDiTBlock) 层数
+  mlp_ratio: 4.0              # Transformer FFN 隐藏层倍率
+  tokenizer_mlp_ratio: 1.0    # ImageTokenizer (MLP + SiLU) 隐藏层倍率
+  class_dropout_prob: 0.1     # CFG 类别条件随机丢弃概率（设为 0.0 则关闭无条件分支）
+  num_classes: 1              # 类别总数（会自动与 prompt_vocab 词表大小取 max）
+  learn_sigma: false          # Flow Matching 直接预测 3 通道速度场 v
+
+# ------------------------------------------------------------------------------
+# 3. 扩散范式配置 (Rectified Flow / Flow Matching)
+# ------------------------------------------------------------------------------
+diffusion:
+  timestep_scale: 1000.0            # 将连续 t in [0, 1] 缩放到 [0, 1000] 输入正弦时间步编码
+  timestep_sampling: "logit_normal" # 可选: "logit_normal" | "uniform"
+  logit_mean: 0.0
+  logit_std: 1.0
+
+# ------------------------------------------------------------------------------
+# 4. 训练超参数配置
+# ------------------------------------------------------------------------------
+train:
+  total_steps: 2000
+  batch_size_per_gpu: 4
+  grad_accum_steps: 1
+  lr: 2.0e-4
+  min_lr: 1.0e-5
+  lr_scheduler: "cosine"      # 可选: "cosine" | "constant"
+  warmup_steps: 100
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  max_grad_norm: 1.0
+  mixed_precision: "bf16"     # 可选: "bf16" | "fp16" | "no"
+  ema_decay: 0.995
+  num_workers: 0
+  log_every: 20
+  sample_every: 200
+  ckpt_every: 500
+  resume_from: null           # 断点续训路径，如 "outputs/dual_dit_dog/checkpoints/latest.pt"
+
+# ------------------------------------------------------------------------------
+# 5. 训练期验证采样与导出配置
+# ------------------------------------------------------------------------------
+sample:
+  prompt: "小狗"
+  num_steps: 50
+  cfg_scale: 1.5
+  num_samples: 1
+  seed: 42
